@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# skript ultimate për wireguard v2.0
+# skript ultimate për wireguard v2.1 - vetëm ipv4
 # baza: wireguard-install nga angristan
 # përmirësuar me: cloudflared doh + siguri + optimizime pa humbje pakete
 # https://github.com/angristan/wireguard-install
@@ -10,9 +10,9 @@ ORANGE='\033[0;33m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
-echo -e "${GREEN}=== Ultimate WireGuard Setup v2.0 ===${NC}"
+echo -e "${GREEN}=== Ultimate WireGuard Setup v2.1 - IPv4 Only ===${NC}"
 echo "This script will install:"
-echo "  ✓ WireGuard VPN (Angristan's script)"
+echo "  ✓ WireGuard VPN (IPv4 ONLY - no IPv6 leaks)"
 echo "  ✓ Cloudflared DNS-over-HTTPS"
 echo "  ✓ Aggressive firewall (block all except SSH + VPN)"
 echo "  ✓ Zero packet loss optimizations"
@@ -21,36 +21,55 @@ echo "  ✓ NO duplicate rules"
 echo ""
 
 # shkarko skriptin e angristan
-echo -e "${GREEN}[1/7] Downloading WireGuard installer...${NC}"
+echo -e "${GREEN}[1/8] Downloading WireGuard installer...${NC}"
 curl -fsSL https://raw.githubusercontent.com/angristan/wireguard-install/master/wireguard-install.sh -o /tmp/wg-install.sh
 chmod +x /tmp/wg-install.sh
 
 # ekzekuto instalimin e wireguard
-echo -e "${GREEN}[2/7] Installing WireGuard...${NC}"
+echo -e "${GREEN}[2/8] Installing WireGuard...${NC}"
 bash /tmp/wg-install.sh
 
 # merr portin e wireguard nga konfigurimi
 WG_PORT=$(grep "ListenPort" /etc/wireguard/wg0.conf | awk '{print $3}')
 echo -e "${GREEN}WireGuard installed on port: ${WG_PORT}${NC}"
 
-# kritike: hiq postup/postdown të wireguard (ne menaxhojmë firewall-in vetë)
-echo -e "${GREEN}[3/7] Removing WireGuard PostUp/PostDown rules (we handle firewall)...${NC}"
+# KRITIKE: hiq të gjitha adresat ipv6 për të parandaluar rrjedhjet
+echo -e "${GREEN}[3/8] Removing ALL IPv6 addresses (preventing leaks)...${NC}"
+
+# hiq ipv6 nga interfejsi i serverit
+sed -i 's/Address = \(10\.[0-9.]*\/[0-9]*\),.*/Address = \1/' /etc/wireguard/wg0.conf
+
+# hiq ipv6 nga konfigurimi i klientit
+for conf in /root/wg0-client-*.conf; do
+    if [ -f "$conf" ]; then
+        # hiq ipv6 nga address
+        sed -i 's/Address = \(10\.[0-9.]*\/[0-9]*\),.*/Address = \1/' "$conf"
+        # hiq ipv6 nga allowedips
+        sed -i 's/AllowedIPs = 0\.0\.0\.0\/0,.*/AllowedIPs = 0.0.0.0\/0/' "$conf"
+    fi
+done
+
+# hiq ipv6 nga peer allowedips në server config
+sed -i 's/AllowedIPs = \(10\.[0-9.]*\/[0-9]*\),.*/AllowedIPs = \1/' /etc/wireguard/wg0.conf
+
+# KRITIKE: hiq postup/postdown të wireguard (ne menaxhojmë firewall-in vetë)
+echo -e "${GREEN}[4/8] Removing WireGuard PostUp/PostDown rules...${NC}"
 sed -i '/^PostUp/d' /etc/wireguard/wg0.conf
 sed -i '/^PostDown/d' /etc/wireguard/wg0.conf
 
-# rifillo wireguard me konfigurim të pastër
+# rifillo wireguard me konfigurim të pastër ipv4-only
 systemctl restart wg-quick@wg0
 
 # instalo cloudflared
-echo -e "${GREEN}[4/7] Installing Cloudflared DNS-over-HTTPS...${NC}"
+echo -e "${GREEN}[5/8] Installing Cloudflared DNS-over-HTTPS (IPv4 only)...${NC}"
 wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
 dpkg -i cloudflared-linux-amd64.deb
 rm -f cloudflared-linux-amd64.deb
 
-# konfiguro cloudflared
+# konfiguro cloudflared - vetëm ipv4
 cat > /etc/systemd/system/cloudflared-dns.service << 'EOF'
 [Unit]
-Description=Cloudflared DNS over HTTPS proxy
+Description=Cloudflared DNS over HTTPS proxy (IPv4 only)
 After=network.target wg-quick@wg0.service
 Requires=wg-quick@wg0.service
 
@@ -75,8 +94,8 @@ for conf in /root/wg0-client-*.conf; do
     fi
 done
 
-# vendos firewall (i pastër, pa dublikate)
-echo -e "${GREEN}[5/7] Setting up secure firewall...${NC}"
+# vendos firewall ipv4-only (i pastër, pa dublikate)
+echo -e "${GREEN}[6/8] Setting up IPv4-only firewall...${NC}"
 
 # pastro çdo rregull ekzistues për të filluar pastër
 iptables -F INPUT
@@ -90,7 +109,7 @@ iptables -A INPUT -p udp --dport ${WG_PORT} -j ACCEPT
 iptables -A INPUT -p udp -s 10.66.66.0/24 --dport 53 -j ACCEPT
 iptables -A INPUT -p tcp -s 10.66.66.0/24 --dport 53 -j ACCEPT
 
-# rregullat forward
+# rregullat forward - vetëm ipv4
 iptables -A FORWARD -i wg0 -j ACCEPT
 iptables -A FORWARD -i eth0 -o wg0 -j ACCEPT
 iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
@@ -100,12 +119,18 @@ iptables -P OUTPUT ACCEPT
 iptables -P FORWARD DROP
 iptables -P INPUT DROP
 
+# BONUS: bloko të gjithë trafikun ipv6 për siguri maksimale
+echo -e "${GREEN}Blocking ALL IPv6 traffic (leak prevention)...${NC}"
+ip6tables -P INPUT DROP
+ip6tables -P FORWARD DROP
+ip6tables -P OUTPUT DROP
+
 # ruaj rregullat e firewall
 apt-get install -y iptables-persistent
 netfilter-persistent save
 
 # optimizime agresive sysctl për zero humbje paketash
-echo -e "${GREEN}[6/7] Applying zero packet loss optimizations...${NC}"
+echo -e "${GREEN}[7/8] Applying zero packet loss optimizations...${NC}"
 cat > /etc/sysctl.d/99-wireguard-optimize.conf << 'EOF'
 # optimizime agresive për zero humbje pakete
 # tabelë masive për connection tracking
@@ -138,12 +163,16 @@ net.ipv4.tcp_tw_reuse = 1
 net.ipv4.tcp_keepalive_time = 600
 net.ipv4.tcp_keepalive_probes = 5
 net.ipv4.tcp_keepalive_intvl = 15
+
+# çaktivizo ipv6 plotësisht
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
 EOF
 
 sysctl -p /etc/sysctl.d/99-wireguard-optimize.conf > /dev/null 2>&1
 
 # forco ssh
-echo -e "${GREEN}[7/7] Hardening SSH...${NC}"
+echo -e "${GREEN}[8/8] Hardening SSH...${NC}"
 cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
 sed -i 's/^#*PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
 sed -i 's/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
@@ -154,7 +183,7 @@ systemctl restart wg-quick@wg0
 systemctl restart cloudflared-dns.service
 
 # verifiko që nuk ka dublikate
-echo -e "${GREEN}Verifying firewall (no duplicates)...${NC}"
+echo -e "${GREEN}Verifying firewall (IPv4 only, no duplicates)...${NC}"
 sleep 2
 
 # kontrolli final i statusit
@@ -163,9 +192,10 @@ echo -e "${GREEN}================================${NC}"
 echo -e "${GREEN}  Installation Complete! 🎉${NC}"
 echo -e "${GREEN}================================${NC}"
 echo ""
-echo -e "${GREEN}✓ WireGuard:${NC} Running on port ${WG_PORT}"
+echo -e "${GREEN}✓ WireGuard:${NC} Running on port ${WG_PORT} (IPv4 ONLY)"
 echo -e "${GREEN}✓ Cloudflared:${NC} $(systemctl is-active cloudflared-dns.service)"
 echo -e "${GREEN}✓ Firewall:${NC} DROP policy active (NO duplicates)"
+echo -e "${GREEN}✓ IPv6:${NC} DISABLED (no leaks possible)"
 echo -e "${GREEN}✓ SSH:${NC} Password auth disabled"
 echo -e "${GREEN}✓ Optimizations:${NC} Zero packet loss configured"
 echo ""
@@ -176,14 +206,16 @@ echo -e "${ORANGE}Connection Details:${NC}"
 SERVER_IP=$(grep "Endpoint" /root/wg0-client-*.conf | head -1 | cut -d'=' -f2 | xargs | cut -d':' -f1)
 echo "  Server: ${SERVER_IP}:${WG_PORT}"
 echo "  DNS: 10.66.66.1 (encrypted DoH)"
+echo "  IPv6: DISABLED (maximum privacy)"
 echo ""
 echo -e "${GREEN}All ports blocked except SSH (22) and WireGuard (${WG_PORT})${NC}"
 echo ""
 echo -e "${ORANGE}Firewall Status:${NC}"
-echo "  INPUT rules: $(iptables -L INPUT --line-numbers | grep -c '^[0-9]')"
-echo "  FORWARD rules: $(iptables -L FORWARD --line-numbers | grep -c '^[0-9]')"
+echo "  IPv4 INPUT rules: $(iptables -L INPUT --line-numbers | grep -c '^[0-9]')"
+echo "  IPv4 FORWARD rules: $(iptables -L FORWARD --line-numbers | grep -c '^[0-9]')"
+echo "  IPv6: FULLY BLOCKED"
 echo "  Blocked packets: $(iptables -L INPUT -n -v | grep 'policy DROP' | awk '{print $1}')"
 echo ""
 echo -e "${ORANGE}To add more clients: sudo bash /tmp/wg-install.sh${NC}"
-echo -e "${ORANGE}Then update DNS: sed -i 's/DNS = .*/DNS = 10.66.66.1/' /root/wg0-client-*.conf${NC}"
+echo -e "${ORANGE}Then update: sed -i 's/DNS = .*/DNS = 10.66.66.1/; s/,.*//; s/AllowedIPs = .*/AllowedIPs = 0.0.0.0\/0/' /root/wg0-client-*.conf${NC}"
 echo ""
