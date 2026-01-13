@@ -1,93 +1,63 @@
-# 🔒 Ultimate WireGuard VPN Setup
+# wireguard installer
 
-One-command installation of a secure, high-performance WireGuard VPN server with encrypted DNS and zero packet loss.
+ky projekt eshte nje bash script qe te ben setup te nje wireguard vpn server ne linux sa me kollaj qe te mundesht
 
-## ✨ Features
+## qka eshte wireguard
 
-- **🔐 Maximum Security**: Blocks all ports except SSH + VPN, SSH keys only
-- **🔒 DNS-over-HTTPS**: Encrypted DNS via Cloudflare (no DNS leaks)
-- **🚀 Zero Packet Loss**: Optimized for stable connections, no disconnects
-- **⚡ High Performance**: 2M connection tracking, 10min UDP timeouts, 256MB buffers
-- **🎯 Easy Setup**: Single command installation on fresh Ubuntu servers
+wireguard eshte nje vpn moderne dhe shume i shpejt qe punon ne nivelin e kernelit
 
-## 🚀 Quick Start
+me kete script klienti do te dergoj te gjith trafikun e tij nepermjet nje tuneli te enkriptuar ne server dhe serveri do ta rout ate trafik me nat keshtu qe do te duket sikur klienti po ban browse me ip te serverit
 
-```bash
-curl -O https://raw.githubusercontent.com/alban-hh/Office-VPN-Client-WG/main/wg-install.sh
-chmod +x wg-install.sh
-sudo ./wg-install.sh
-```
+skripti suporton edhe ipv4 edhe ipv6
 
-**Requirements:** Fresh Ubuntu 20.04+ server with root access
+## kerkesa
 
-## 📦 What Gets Installed
+sisteme operative te suportuara:
 
-1. **WireGuard VPN** - Modern, fast VPN protocol
-2. **Cloudflared** - DNS-over-HTTPS proxy (encrypted DNS)
-3. **iptables Firewall** - Blocks all ports except SSH (22) and VPN
-4. **Sysctl Optimizations** - Zero packet loss configuration
-5. **SSH Hardening** - Password auth disabled
+- almalinux >= 8
+- alpine linux
+- arch linux
+- centos stream >= 8
+- debian >= 10
+- fedora >= 32
+- oracle linux
+- rocky linux >= 8
+- ubuntu >= 18.04
 
-## 🔧 Configuration
+## perdorimi
 
-The script will ask you:
-- Server IP address (auto-detected)
-- VPN port (random 49152-65535)
-- First client name
-- Press Enter for all defaults
-
-## 📱 Client Setup
-
-After installation, find your client config:
-```bash
-cat /root/wg0-client-*.conf
-```
-
-**Windows/Mac/Linux:** Import the `.conf` file into WireGuard app
-
-**Mobile:** Scan the QR code shown at the end
-
-## 🛡️ Security Features
-
-- ✅ All ports blocked except SSH + VPN
-- ✅ Password authentication disabled (SSH keys only)
-- ✅ DNS encrypted via Cloudflare 1.1.1.1
-- ✅ No DNS leaks
-- ✅ DROP policy firewall
-
-## ⚡ Performance Optimizations
-
-- 2,097,152 max connections
-- 600 second UDP timeout (prevents disconnects)
-- 256MB network buffers
-- 30,000 packet queue
-- TCP BBR congestion control
-
-## 🔄 Adding More Clients
+shkarko dhe ekzekuto skriptin dhe pergjigju pyetjeve
 
 ```bash
-sudo bash /tmp/wg-install.sh
+curl -O https://raw.githubusercontent.com/alban-hh/wireguard-install/master/wireguard-install.sh
+chmod +x wireguard-install.sh
+./wireguard-install.sh
 ```
 
-Select "Add a new user" from the menu.
+do te instaloj wireguard ne server do ta konfiguron do te krijoj nje systemd service dhe nje file konfigurimi per klientin
 
-## 📊 Verify Installation
+ekzekuto skriptin perseri per te shtuar ose larguar klienta
 
-```bash
-# Check WireGuard status
-sudo wg show
+## provajdera te rekomanduar
 
-# Check firewall
-sudo iptables -L -n -v
+disa provajdera te lire dhe te mire per vpn server:
 
-# Check Cloudflared
-sudo systemctl status cloudflared-dns.service
-```
+- vultr me lokacione neper bote ipv6 support nga $5 ne muaj
+- hetzner ne gjermani finlande dhe usa me ipv6 dhe 20 tb trafik nga 4.5 euro ne muaj
+- digital ocean me lokacione neper bote ipv6 support nga $4 ne muaj
 
-## 🆘 Support
+## kontribut
 
-Open an issue if you encounter problems.
+kontributet jan te mirepritura
 
-## 📄 License
+### diskuto ndryshimet
 
-MIT License - Free to use and modify.
+hap nje issue para se te besh pull request nese don me diskutu ndonje ndryshim te madh
+
+### formatimi i kodit
+
+perdorim shellcheck dhe shfmt per te garantuar qe kodi bash eshte i shkruar mire
+
+## licence
+
+ky projekt eshte nen licence mit
