@@ -1,391 +1,625 @@
 #!/bin/bash
 
-# skript ultimate për wireguard v2.3 - ubuntu 24.04 optimized
-# baza: wireguard-install nga angristan
-# përmirësuar me: cloudflared doh + siguri + optimizime pa humbje pakete
-# v2.3: multiple failproof methods, ubuntu 24.04 optimized
-# https://github.com/alban-hh/VPN-Client-WG
+# instalues per wireguard vpn server
+# https://github.com/alban-hh/wireguard-install
 
+# ngjyrat per output ne terminal
 RED='\033[0;31m'
 ORANGE='\033[0;33m'
 GREEN='\033[0;32m'
-BLUE='\033[0;34m'
 NC='\033[0m'
 
-# kontrollo root permissions
-if [ "$EUID" -ne 0 ]; then 
-   echo -e "${RED}Error: Duhet të ekzekutosh si root (sudo)${NC}"
-   exit 1
-fi
-
-echo -e "${GREEN}=== Ultimate WireGuard Setup v2.3 ===${NC}"
-echo -e "${BLUE}Optimized for Ubuntu 24.04 64-bit${NC}"
-echo ""
-
-# kontrollo os dhe version (ubuntu 24.04 e kërkuar)
-echo -e "${GREEN}[1/12] Checking OS and version...${NC}"
-
-if [ ! -f /etc/os-release ]; then
-    echo -e "${RED}Error: Cannot detect OS. /etc/os-release not found.${NC}"
-    exit 1
-fi
-
-source /etc/os-release
-
-if [ "$ID" != "ubuntu" ]; then
-    echo -e "${ORANGE}Warning: This script is optimized for Ubuntu 24.04${NC}"
-    echo -e "${ORANGE}Current OS: $ID${NC}"
-    read -p "Continue anyway? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        exit 1
-    fi
-elif [ "$VERSION_ID" != "24.04" ]; then
-    echo -e "${ORANGE}Warning: This script is optimized for Ubuntu 24.04${NC}"
-    echo -e "${ORANGE}Current version: $VERSION_ID${NC}"
-    echo -e "${ORANGE}Continuing anyway...${NC}"
-fi
-
-echo -e "${GREEN}✓ OS Check: $ID $VERSION_ID${NC}"
-
-# kontrollo arkitekturën (64-bit e kërkuar)
-echo -e "${GREEN}[2/12] Checking architecture...${NC}"
-ARCH=$(uname -m)
-
-if [ "$ARCH" != "x86_64" ]; then
-    echo -e "${RED}Error: This script requires 64-bit (x86_64)${NC}"
-    echo -e "${RED}Current architecture: $ARCH${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}✓ Architecture: $ARCH (64-bit)${NC}"
-
-# auto-detect public network interface (multiple methods)
-echo -e "${GREEN}[3/12] Auto-detecting public network interface (multiple methods)...${NC}"
-
-# metoda 1: default route
-PUBLIC_NIC=$(ip -4 route ls | grep default | grep -Po '(?<=dev )(\S+)' | head -1)
-
-# metoda 2: nëse metoda 1 dështon
-if [ -z "$PUBLIC_NIC" ]; then
-    PUBLIC_NIC=$(ip -4 addr show | grep -v "127.0.0.1" | grep "inet " | awk '{print $NF}' | head -1)
-fi
-
-# metoda 3: kontrollo interface të zakonshme për ubuntu 24.04
-if [ -z "$PUBLIC_NIC" ]; then
-    for iface in eth0 ens3 ens4 ens5 enp0s3 enp0s8; do
-        if ip addr show "$iface" >/dev/null 2>&1; then
-            PUBLIC_NIC="$iface"
-            break
-        fi
-    done
-fi
-
-# validim final
-if [ -z "$PUBLIC_NIC" ]; then
-    echo -e "${RED}Error: Could not auto-detect public network interface!${NC}"
-    echo -e "${ORANGE}Available interfaces:${NC}"
-    ip -4 addr show | grep -E "^[0-9]+:" | awk '{print $2}' | tr -d ':'
-    echo ""
-    read -p "Enter interface name manually: " PUBLIC_NIC
-    
-    if [ -z "$PUBLIC_NIC" ]; then
-        echo -e "${RED}Error: No interface specified. Exiting.${NC}"
-        exit 1
-    fi
-fi
-
-# validim që interface ekziston dhe ka ip
-if ! ip addr show "$PUBLIC_NIC" >/dev/null 2>&1; then
-    echo -e "${RED}Error: Interface $PUBLIC_NIC does not exist!${NC}"
-    exit 1
-fi
-
-if ! ip addr show "$PUBLIC_NIC" | grep -q "inet "; then
-    echo -e "${RED}Error: Interface $PUBLIC_NIC has no IPv4 address!${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}✓ Detected public interface: ${PUBLIC_NIC}${NC}"
-
-# kontrollo konektivitetin në internet
-echo -e "${GREEN}[4/12] Checking internet connectivity...${NC}"
-
-if ! ping -c 1 -W 5 8.8.8.8 >/dev/null 2>&1; then
-    echo -e "${RED}Error: No internet connection detected!${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}✓ Internet connectivity: OK${NC}"
-
-# shkarko skriptin e angristan
-echo -e "${GREEN}[5/12] Downloading WireGuard installer...${NC}"
-
-if ! curl -fsSL https://raw.githubusercontent.com/angristan/wireguard-install/master/wireguard-install.sh -o /tmp/wg-install.sh; then
-    echo -e "${RED}Error: Failed to download WireGuard installer!${NC}"
-    exit 1
-fi
-
-chmod +x /tmp/wg-install.sh
-echo -e "${GREEN}✓ Installer downloaded${NC}"
-
-# ekzekuto instalimin e wireguard
-echo -e "${GREEN}[6/12] Installing WireGuard...${NC}"
-echo -e "${ORANGE}Please answer the installer questions...${NC}"
-echo ""
-
-bash /tmp/wg-install.sh
-
-# validim që wireguard u instalua
-if [ ! -f /etc/wireguard/wg0.conf ]; then
-    echo -e "${RED}Error: WireGuard installation failed or was cancelled!${NC}"
-    exit 1
-fi
-
-# merr portin e wireguard nga konfigurimi
-WG_PORT=$(grep "ListenPort" /etc/wireguard/wg0.conf | awk '{print $3}')
-
-if [ -z "$WG_PORT" ]; then
-    echo -e "${RED}Error: Could not detect WireGuard port!${NC}"
-    exit 1
-fi
-
-echo -e "${GREEN}✓ WireGuard installed on port: ${WG_PORT}${NC}"
-
-# backup i konfigurimit origjinal
-echo -e "${GREEN}[7/12] Backing up original configuration...${NC}"
-cp /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.backup-$(date +%Y%m%d-%H%M%S)
-echo -e "${GREEN}✓ Backup created${NC}"
-
-# KRITIKE: hiq të gjitha adresat ipv6 për të parandaluar rrjedhjet
-echo -e "${GREEN}[8/12] Removing ALL IPv6 addresses (preventing leaks)...${NC}"
-
-# hiq ipv6 nga interfejsi i serverit
-sed -i 's/Address = \(10\.[0-9.]*\/[0-9]*\),.*/Address = \1/' /etc/wireguard/wg0.conf
-
-# hiq ipv6 nga konfigurimi i klientit
-for conf in /root/wg0-client-*.conf; do
-    if [ -f "$conf" ]; then
-        sed -i 's/Address = \(10\.[0-9.]*\/[0-9]*\),.*/Address = \1/' "$conf"
-        sed -i 's/AllowedIPs = 0\.0\.0\.0\/0,.*/AllowedIPs = 0.0.0.0\/0/' "$conf"
-    fi
-done
-
-# hiq ipv6 nga peer allowedips në server config
-sed -i 's/AllowedIPs = \(10\.[0-9.]*\/[0-9]*\),.*/AllowedIPs = \1/' /etc/wireguard/wg0.conf
-
-# hiq postup/postdown (ne menaxhojmë firewall-in vetë)
-sed -i '/^PostUp/d' /etc/wireguard/wg0.conf
-sed -i '/^PostDown/d' /etc/wireguard/wg0.conf
-
-echo -e "${GREEN}✓ IPv6 removed from all configs${NC}"
-
-# instalo cloudflared
-echo -e "${GREEN}[9/12] Installing Cloudflared DNS-over-HTTPS...${NC}"
-
-if ! wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb; then
-    echo -e "${RED}Error: Failed to download Cloudflared!${NC}"
-    exit 1
-fi
-
-if ! dpkg -i cloudflared-linux-amd64.deb; then
-    echo -e "${RED}Error: Failed to install Cloudflared!${NC}"
-    exit 1
-fi
-
-rm -f cloudflared-linux-amd64.deb
-
-# konfiguro cloudflared - vetëm ipv4
-cat > /etc/systemd/system/cloudflared-dns.service << 'EOF'
-[Unit]
-Description=Cloudflared DNS over HTTPS proxy (IPv4 only)
-After=network.target wg-quick@wg0.service
-Requires=wg-quick@wg0.service
-
-[Service]
-Type=simple
-User=root
-ExecStart=/usr/local/bin/cloudflared proxy-dns --address 10.66.66.1 --port 53 --upstream https://1.1.1.1/dns-query --upstream https://1.0.0.1/dns-query
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable cloudflared-dns.service
-
-# përditëso konfigurimin e klientit për dns të enkriptuar
-for conf in /root/wg0-client-*.conf; do
-    if [ -f "$conf" ]; then
-        sed -i 's/DNS = .*/DNS = 10.66.66.1/' "$conf"
-    fi
-done
-
-echo -e "${GREEN}✓ Cloudflared installed and configured${NC}"
-
-# vendos firewall ipv4-only
-echo -e "${GREEN}[10/12] Setting up IPv4-only firewall with interface ${PUBLIC_NIC}...${NC}"
-
-# pastro çdo rregull ekzistues për të filluar pastër
-iptables -F INPUT 2>/dev/null || true
-iptables -F FORWARD 2>/dev/null || true
-iptables -t nat -F POSTROUTING 2>/dev/null || true
-
-# shto të gjitha rregullat allow para politikës drop
-iptables -A INPUT -i lo -j ACCEPT
-iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-iptables -A INPUT -p udp --dport ${WG_PORT} -j ACCEPT
-iptables -A INPUT -p udp -s 10.66.66.0/24 --dport 53 -j ACCEPT
-iptables -A INPUT -p tcp -s 10.66.66.0/24 --dport 53 -j ACCEPT
-
-# rregullat forward me interface të detektuar
-iptables -A FORWARD -i wg0 -o ${PUBLIC_NIC} -j ACCEPT
-iptables -A FORWARD -i ${PUBLIC_NIC} -o wg0 -j ACCEPT
-iptables -A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-
-# NAT/MASQUERADE (zëvendëson postup të wireguard)
-iptables -t nat -A POSTROUTING -o ${PUBLIC_NIC} -j MASQUERADE
-
-# vendos politikat
-iptables -P OUTPUT ACCEPT
-iptables -P FORWARD DROP
-iptables -P INPUT DROP
-
-# bloko të gjithë trafikun ipv6
-ip6tables -P INPUT DROP 2>/dev/null || true
-ip6tables -P FORWARD DROP 2>/dev/null || true
-ip6tables -P OUTPUT DROP 2>/dev/null || true
-
-# instalo iptables-persistent nëse nuk ekziston
-if ! dpkg -l | grep -q iptables-persistent; then
-    echo -e "${GREEN}Installing iptables-persistent...${NC}"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
-fi
-
-# ruaj rregullat
-netfilter-persistent save
-
-echo -e "${GREEN}✓ Firewall configured (IPv4 only, interface: ${PUBLIC_NIC})${NC}"
-
-# optimizime sysctl për zero humbje paketash
-echo -e "${GREEN}[11/12] Applying zero packet loss optimizations...${NC}"
-
-cat > /etc/sysctl.d/99-wireguard-optimize.conf << EOF
-# optimizime agresive për zero humbje pakete
-net.netfilter.nf_conntrack_max = 2097152
-net.netfilter.nf_conntrack_udp_timeout = 600
-net.netfilter.nf_conntrack_udp_timeout_stream = 600
-net.core.rmem_max = 268435456
-net.core.wmem_max = 268435456
-net.core.rmem_default = 16777216
-net.core.wmem_default = 16777216
-net.ipv4.tcp_rmem = 4096 87380 134217728
-net.ipv4.tcp_wmem = 4096 65536 134217728
-net.ipv4.udp_rmem_min = 16384
-net.ipv4.udp_wmem_min = 16384
-net.core.netdev_max_backlog = 30000
-net.core.somaxconn = 8192
-net.ipv4.tcp_tw_reuse = 1
-net.ipv4.tcp_keepalive_time = 600
-net.ipv4.tcp_keepalive_probes = 5
-net.ipv4.tcp_keepalive_intvl = 15
-net.ipv6.conf.all.disable_ipv6 = 1
-net.ipv6.conf.default.disable_ipv6 = 1
-net.ipv6.conf.${PUBLIC_NIC}.disable_ipv6 = 1
-net.ipv6.conf.wg0.disable_ipv6 = 1
-EOF
-
-sysctl -p /etc/sysctl.d/99-wireguard-optimize.conf > /dev/null 2>&1
-
-echo -e "${GREEN}✓ Optimizations applied${NC}"
-
-# forco ssh
-echo -e "${GREEN}[12/12] Hardening SSH...${NC}"
-
-if [ ! -f /etc/ssh/sshd_config.backup ]; then
-    cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
-fi
-
-sed -i 's/^#*PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-sed -i 's/^#*PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
-
-# validim që ka ssh keys para se të çaktivizojmë passwords
-if [ ! -f ~/.ssh/authorized_keys ] || [ ! -s ~/.ssh/authorized_keys ]; then
-    echo -e "${ORANGE}Warning: No SSH keys found in ~/.ssh/authorized_keys${NC}"
-    echo -e "${ORANGE}Skipping SSH password disable for safety.${NC}"
-    sed -i 's/^PasswordAuthentication no/#PasswordAuthentication yes/' /etc/ssh/sshd_config
+# funksion per te instaluar pakot qe na duhen
+function installPackages() {
+	if ! "$@"; then
+		echo -e "${RED}Failed to install packages.${NC}"
+		echo "Please check your internet connection and package sources."
+		exit 1
+	fi
+}
+
+# shiko nese je root user se pa root skarrxon
+function isRoot() {
+	if [ "${EUID}" -ne 0 ]; then
+		echo "You need to run this script as root"
+		exit 1
+	fi
+}
+
+# kontrollojme qfare virtualizimi perdoret se jo te gjithe punojne
+function checkVirt() {
+	if command -v virt-what &>/dev/null; then
+		VIRT=$(virt-what)
+	else
+		VIRT=$(systemd-detect-virt)
+	fi
+	# openvz eshte mut skarrxon me wireguard
+	if [[ ${VIRT} == "openvz" ]]; then
+		echo "OpenVZ is not supported"
+		exit 1
+	fi
+	# lxc ndonjehere rrin po eshte pak kompleks
+	if [[ ${VIRT} == "lxc" ]]; then
+		echo "LXC is not supported (yet)."
+		echo "WireGuard can technically run in an LXC container,"
+		echo "but the kernel module has to be installed on the host,"
+		echo "the container has to be run with some specific parameters"
+		echo "and only the tools need to be installed in the container."
+		exit 1
+	fi
+}
+
+# shikojme qfar sistemi operativ kemi qe te dim qysh te instalojme
+function checkOS() {
+	source /etc/os-release
+	OS="${ID}"
+	# debian dhe raspbian jan njejt me njeqind
+	if [[ ${OS} == "debian" || ${OS} == "raspbian" ]]; then
+		if [[ ${VERSION_ID} -lt 10 ]]; then
+			echo "Your version of Debian (${VERSION_ID}) is not supported. Please use Debian 10 Buster or later"
+			exit 1
+		fi
+		OS=debian # nese eshte raspbian e bejme debian
+	elif [[ ${OS} == "ubuntu" ]]; then
+		RELEASE_YEAR=$(echo "${VERSION_ID}" | cut -d'.' -f1)
+		if [[ ${RELEASE_YEAR} -lt 18 ]]; then
+			echo "Your version of Ubuntu (${VERSION_ID}) is not supported. Please use Ubuntu 18.04 or later"
+			exit 1
+		fi
+	elif [[ ${OS} == "fedora" ]]; then
+		if [[ ${VERSION_ID} -lt 32 ]]; then
+			echo "Your version of Fedora (${VERSION_ID}) is not supported. Please use Fedora 32 or later"
+			exit 1
+		fi
+	elif [[ ${OS} == 'centos' ]] || [[ ${OS} == 'almalinux' ]] || [[ ${OS} == 'rocky' ]]; then
+		if [[ ${VERSION_ID} == 7* ]]; then
+			echo "Your version of CentOS (${VERSION_ID}) is not supported. Please use CentOS 8 or later"
+			exit 1
+		fi
+	elif [[ -e /etc/oracle-release ]]; then
+		source /etc/os-release
+		OS=oracle
+	elif [[ -e /etc/arch-release ]]; then
+		OS=arch
+	elif [[ -e /etc/alpine-release ]]; then
+		OS=alpine
+		if ! command -v virt-what &>/dev/null; then
+			if ! (apk update && apk add virt-what); then
+				echo -e "${RED}Failed to install virt-what. Continuing without virtualization check.${NC}"
+			fi
+		fi
+	else
+		echo "Looks like you aren't running this installer on a Debian, Ubuntu, Fedora, CentOS, AlmaLinux, Oracle or Arch Linux system"
+		exit 1
+	fi
+}
+
+# merr home directory te userit ku do te shkruajme konfigurimin e klientit
+function getHomeDirForClient() {
+	local CLIENT_NAME=$1
+
+	if [ -z "${CLIENT_NAME}" ]; then
+		echo "Error: getHomeDirForClient() requires a client name as argument"
+		exit 1
+	fi
+
+	# gjejme home directoryne e userit ku te shkruajme configs
+	if [ -e "/home/${CLIENT_NAME}" ]; then
+		# nese ekziston useri e perdorim ate
+		HOME_DIR="/home/${CLIENT_NAME}"
+	elif [ "${SUDO_USER}" ]; then
+		# nese jo perdorim sudo user
+		if [ "${SUDO_USER}" == "root" ]; then
+			# nese root eshte atehere /root
+			HOME_DIR="/root"
+		else
+			HOME_DIR="/home/${SUDO_USER}"
+		fi
+	else
+		# ne fund te fundit /root nese sdi me ku
+		HOME_DIR="/root"
+	fi
+
+	echo "$HOME_DIR"
+}
+
+# funksioni qe ben te gjitha kontrollet para se te fillojme
+function initialCheck() {
+	isRoot
+	checkOS
+	checkVirt
+}
+
+# pyesim userin disa gjera qe na duhen per setup
+function installQuestions() {
+	echo "Welcome to the WireGuard installer!"
+	echo "The git repository is available at: https://github.com/alban-hh/wireguard-install"
+	echo ""
+	echo "I need to ask you a few questions before starting the setup."
+	echo "You can keep the default options and just press enter if you are ok with them."
+	echo ""
+
+	# gjejme ip publike te serverit automatikisht
+	SERVER_PUB_IP=$(ip -4 addr | sed -ne 's|^.* inet \([^/]*\)/.* scope global.*$|\1|p' | awk '{print $1}' | head -1)
+	if [[ -z ${SERVER_PUB_IP} ]]; then
+		# nese skan ipv4 shikojme per ipv6
+		SERVER_PUB_IP=$(ip -6 addr | sed -ne 's|^.* inet6 \([^/]*\)/.* scope global.*$|\1|p' | head -1)
+	fi
+	read -rp "IPv4 or IPv6 public address: " -e -i "${SERVER_PUB_IP}" SERVER_PUB_IP
+
+	# gjejme network interface publike
+	SERVER_NIC="$(ip -4 route ls | grep default | awk '/dev/ {for (i=1; i<=NF; i++) if ($i == "dev") print $(i+1)}' | head -1)"
+	until [[ ${SERVER_PUB_NIC} =~ ^[a-zA-Z0-9_]+$ ]]; do
+		read -rp "Public interface: " -e -i "${SERVER_NIC}" SERVER_PUB_NIC
+	done
+
+	until [[ ${SERVER_WG_NIC} =~ ^[a-zA-Z0-9_]+$ && ${#SERVER_WG_NIC} -lt 16 ]]; do
+		read -rp "WireGuard interface name: " -e -i wg0 SERVER_WG_NIC
+	done
+
+	until [[ ${SERVER_WG_IPV4} =~ ^([0-9]{1,3}\.){3} ]]; do
+		read -rp "Server WireGuard IPv4: " -e -i 10.66.66.1 SERVER_WG_IPV4
+	done
+
+	until [[ ${SERVER_WG_IPV6} =~ ^([a-f0-9]{1,4}:){3,4}: ]]; do
+		read -rp "Server WireGuard IPv6: " -e -i fd42:42:42::1 SERVER_WG_IPV6
+	done
+
+	# gjenerojme nje port random qe te jemi pak me te sigurt
+	RANDOM_PORT=$(shuf -i49152-65535 -n1)
+	until [[ ${SERVER_PORT} =~ ^[0-9]+$ ]] && [ "${SERVER_PORT}" -ge 1 ] && [ "${SERVER_PORT}" -le 65535 ]; do
+		read -rp "Server WireGuard port [1-65535]: " -e -i "${RANDOM_PORT}" SERVER_PORT
+	done
+
+	# dns per klientat default cloudflare se eshte i shpejt
+	until [[ ${CLIENT_DNS_1} =~ ^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$ ]]; do
+		read -rp "First DNS resolver to use for the clients: " -e -i 1.1.1.1 CLIENT_DNS_1
+	done
+	until [[ ${CLIENT_DNS_2} =~ ^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$ ]]; do
+		read -rp "Second DNS resolver to use for the clients (optional): " -e -i 1.0.0.1 CLIENT_DNS_2
+		if [[ ${CLIENT_DNS_2} == "" ]]; then
+			CLIENT_DNS_2="${CLIENT_DNS_1}"
+		fi
+	done
+
+	until [[ ${ALLOWED_IPS} =~ ^.+$ ]]; do
+		echo -e "\nWireGuard uses a parameter called AllowedIPs to determine what is routed over the VPN."
+		read -rp "Allowed IPs list for generated clients (leave default to route everything): " -e -i '0.0.0.0/0,::/0' ALLOWED_IPS
+		if [[ ${ALLOWED_IPS} == "" ]]; then
+			ALLOWED_IPS="0.0.0.0/0,::/0"
+		fi
+	done
+
+	echo ""
+	echo "Okay, that was all I needed. We are ready to setup your WireGuard server now."
+	echo "You will be able to generate a client at the end of the installation."
+	read -n1 -r -p "Press any key to continue..."
+}
+
+# funksioni kryesor qe ben instalimin e wireguard
+function installWireGuard() {
+	# fillojme me pyetjet
+	installQuestions
+
+	# instalojme wireguard sipas sistemit operativ
+	if [[ ${OS} == 'ubuntu' ]] || [[ ${OS} == 'debian' && ${VERSION_ID} -gt 10 ]]; then
+		apt-get update
+		installPackages apt-get install -y wireguard iptables resolvconf qrencode
+	elif [[ ${OS} == 'debian' ]]; then
+		if ! grep -rqs "^deb .* buster-backports" /etc/apt/; then
+			echo "deb http://deb.debian.org/debian buster-backports main" >/etc/apt/sources.list.d/backports.list
+			apt-get update
+		fi
+		apt-get update
+		installPackages apt-get install -y iptables resolvconf qrencode
+		installPackages apt-get install -y -t buster-backports wireguard
+	elif [[ ${OS} == 'fedora' ]]; then
+		if [[ ${VERSION_ID} -lt 32 ]]; then
+			installPackages dnf install -y dnf-plugins-core
+			dnf copr enable -y jdoss/wireguard
+			installPackages dnf install -y wireguard-dkms
+		fi
+		installPackages dnf install -y wireguard-tools iptables qrencode
+	elif [[ ${OS} == 'centos' ]] || [[ ${OS} == 'almalinux' ]] || [[ ${OS} == 'rocky' ]]; then
+		if [[ ${VERSION_ID} == 8* ]]; then
+			installPackages yum install -y epel-release elrepo-release
+			installPackages yum install -y kmod-wireguard
+			yum install -y qrencode || true # not available on release 9
+		fi
+		installPackages yum install -y wireguard-tools iptables
+	elif [[ ${OS} == 'oracle' ]]; then
+		installPackages dnf install -y oraclelinux-developer-release-el8
+		dnf config-manager --disable -y ol8_developer
+		dnf config-manager --enable -y ol8_developer_UEKR6
+		dnf config-manager --save -y --setopt=ol8_developer_UEKR6.includepkgs='wireguard-tools*'
+		installPackages dnf install -y wireguard-tools qrencode iptables
+	elif [[ ${OS} == 'arch' ]]; then
+		installPackages pacman -S --needed --noconfirm wireguard-tools qrencode
+	elif [[ ${OS} == 'alpine' ]]; then
+		apk update
+		installPackages apk add wireguard-tools iptables libqrencode-tools
+	fi
+
+	# shikojme nese u instalua si duhet wireguard
+	if ! command -v wg &>/dev/null; then
+		echo -e "${RED}WireGuard installation failed. The 'wg' command was not found.${NC}"
+		echo "Please check the installation output above for errors."
+		exit 1
+	fi
+
+	# sigurohemi qe ekziston directorja e wireguard
+	mkdir /etc/wireguard >/dev/null 2>&1
+
+	# i veme permissions qe te jete e sigurt
+	chmod 600 -R /etc/wireguard/
+
+	# gjenerojme celesat per serverin
+	SERVER_PRIV_KEY=$(wg genkey)
+	SERVER_PUB_KEY=$(echo "${SERVER_PRIV_KEY}" | wg pubkey)
+
+	# ruajme te gjitha settings ne file
+	echo "SERVER_PUB_IP=${SERVER_PUB_IP}
+SERVER_PUB_NIC=${SERVER_PUB_NIC}
+SERVER_WG_NIC=${SERVER_WG_NIC}
+SERVER_WG_IPV4=${SERVER_WG_IPV4}
+SERVER_WG_IPV6=${SERVER_WG_IPV6}
+SERVER_PORT=${SERVER_PORT}
+SERVER_PRIV_KEY=${SERVER_PRIV_KEY}
+SERVER_PUB_KEY=${SERVER_PUB_KEY}
+CLIENT_DNS_1=${CLIENT_DNS_1}
+CLIENT_DNS_2=${CLIENT_DNS_2}
+ALLOWED_IPS=${ALLOWED_IPS}" >/etc/wireguard/params
+
+	# krijoni konfigurimin e server interface
+	echo "[Interface]
+Address = ${SERVER_WG_IPV4}/24,${SERVER_WG_IPV6}/64
+ListenPort = ${SERVER_PORT}
+PrivateKey = ${SERVER_PRIV_KEY}" >"/etc/wireguard/${SERVER_WG_NIC}.conf"
+
+	# nese perdoret firewalld atehere perdorim ato komanda
+	if pgrep firewalld; then
+		FIREWALLD_IPV4_ADDRESS=$(echo "${SERVER_WG_IPV4}" | cut -d"." -f1-3)".0"
+		FIREWALLD_IPV6_ADDRESS=$(echo "${SERVER_WG_IPV6}" | sed 's/:[^:]*$/:0/')
+		echo "PostUp = firewall-cmd --zone=public --add-interface=${SERVER_WG_NIC} && firewall-cmd --add-port ${SERVER_PORT}/udp && firewall-cmd --add-rich-rule='rule family=ipv4 source address=${FIREWALLD_IPV4_ADDRESS}/24 masquerade' && firewall-cmd --add-rich-rule='rule family=ipv6 source address=${FIREWALLD_IPV6_ADDRESS}/24 masquerade'
+PostDown = firewall-cmd --zone=public --add-interface=${SERVER_WG_NIC} && firewall-cmd --remove-port ${SERVER_PORT}/udp && firewall-cmd --remove-rich-rule='rule family=ipv4 source address=${FIREWALLD_IPV4_ADDRESS}/24 masquerade' && firewall-cmd --remove-rich-rule='rule family=ipv6 source address=${FIREWALLD_IPV6_ADDRESS}/24 masquerade'" >>"/etc/wireguard/${SERVER_WG_NIC}.conf"
+	else
+		# nese sperdoret firewalld perdorim iptables normal
+		echo "PostUp = iptables -I INPUT -p udp --dport ${SERVER_PORT} -j ACCEPT
+PostUp = iptables -I FORWARD -i ${SERVER_PUB_NIC} -o ${SERVER_WG_NIC} -j ACCEPT
+PostUp = iptables -I FORWARD -i ${SERVER_WG_NIC} -j ACCEPT
+PostUp = iptables -t nat -A POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE
+PostUp = ip6tables -I FORWARD -i ${SERVER_WG_NIC} -j ACCEPT
+PostUp = ip6tables -t nat -A POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE
+PostDown = iptables -D INPUT -p udp --dport ${SERVER_PORT} -j ACCEPT
+PostDown = iptables -D FORWARD -i ${SERVER_PUB_NIC} -o ${SERVER_WG_NIC} -j ACCEPT
+PostDown = iptables -D FORWARD -i ${SERVER_WG_NIC} -j ACCEPT
+PostDown = iptables -t nat -D POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE
+PostDown = ip6tables -D FORWARD -i ${SERVER_WG_NIC} -j ACCEPT
+PostDown = ip6tables -t nat -D POSTROUTING -o ${SERVER_PUB_NIC} -j MASQUERADE" >>"/etc/wireguard/${SERVER_WG_NIC}.conf"
+	fi
+
+	# aktivizojme ip forwarding qe serveri te mundet te rout traffikun
+	echo "net.ipv4.ip_forward = 1
+net.ipv6.conf.all.forwarding = 1" >/etc/sysctl.d/wg.conf
+
+	if [[ ${OS} == 'fedora' ]]; then
+		chmod -v 700 /etc/wireguard
+		chmod -v 600 /etc/wireguard/*
+	fi
+
+	if [[ ${OS} == 'alpine' ]]; then
+		sysctl -p /etc/sysctl.d/wg.conf
+		rc-update add sysctl
+		ln -s /etc/init.d/wg-quick "/etc/init.d/wg-quick.${SERVER_WG_NIC}"
+		rc-service "wg-quick.${SERVER_WG_NIC}" start
+		rc-update add "wg-quick.${SERVER_WG_NIC}"
+	else
+		sysctl --system
+
+		systemctl start "wg-quick@${SERVER_WG_NIC}"
+		systemctl enable "wg-quick@${SERVER_WG_NIC}"
+	fi
+
+	# krijojme klientin e pare
+	newClient
+	echo -e "${GREEN}If you want to add more clients, you simply need to run this script another time!${NC}"
+
+	# kontrolljome nese wireguard po rrin mire
+	if [[ ${OS} == 'alpine' ]]; then
+		rc-service --quiet "wg-quick.${SERVER_WG_NIC}" status
+	else
+		systemctl is-active --quiet "wg-quick@${SERVER_WG_NIC}"
+	fi
+	WG_RUNNING=$?
+
+	# WireGuard might not work if we updated the kernel. Tell the user to reboot
+	if [[ ${WG_RUNNING} -ne 0 ]]; then
+		echo -e "\n${RED}WARNING: WireGuard does not seem to be running.${NC}"
+		if [[ ${OS} == 'alpine' ]]; then
+			echo -e "${ORANGE}You can check if WireGuard is running with: rc-service wg-quick.${SERVER_WG_NIC} status${NC}"
+		else
+			echo -e "${ORANGE}You can check if WireGuard is running with: systemctl status wg-quick@${SERVER_WG_NIC}${NC}"
+		fi
+		echo -e "${ORANGE}If you get something like \"Cannot find device ${SERVER_WG_NIC}\", please reboot!${NC}"
+	else # WireGuard is running
+		echo -e "\n${GREEN}WireGuard is running.${NC}"
+		if [[ ${OS} == 'alpine' ]]; then
+			echo -e "${GREEN}You can check the status of WireGuard with: rc-service wg-quick.${SERVER_WG_NIC} status\n\n${NC}"
+		else
+			echo -e "${GREEN}You can check the status of WireGuard with: systemctl status wg-quick@${SERVER_WG_NIC}\n\n${NC}"
+		fi
+		echo -e "${ORANGE}If you don't have internet connectivity from your client, try to reboot the server.${NC}"
+	fi
+}
+
+# funksioni per te krijuar nje klient te ri
+function newClient() {
+	# nese eshte ipv6 duhet me i vene brackets
+	if [[ ${SERVER_PUB_IP} =~ .*:.* ]]; then
+		if [[ ${SERVER_PUB_IP} != *"["* ]] || [[ ${SERVER_PUB_IP} != *"]"* ]]; then
+			SERVER_PUB_IP="[${SERVER_PUB_IP}]"
+		fi
+	fi
+	ENDPOINT="${SERVER_PUB_IP}:${SERVER_PORT}"
+
+	echo ""
+	echo "Client configuration"
+	echo ""
+	echo "The client name must consist of alphanumeric character(s). It may also include underscores or dashes and can't exceed 15 chars."
+
+	until [[ ${CLIENT_NAME} =~ ^[a-zA-Z0-9_-]+$ && ${CLIENT_EXISTS} == '0' && ${#CLIENT_NAME} -lt 16 ]]; do
+		read -rp "Client name: " -e CLIENT_NAME
+		CLIENT_EXISTS=$(grep -c -E "^### Client ${CLIENT_NAME}\$" "/etc/wireguard/${SERVER_WG_NIC}.conf")
+
+		if [[ ${CLIENT_EXISTS} != 0 ]]; then
+			echo ""
+			echo -e "${ORANGE}A client with the specified name was already created, please choose another name.${NC}"
+			echo ""
+		fi
+	done
+
+	# gjejme nje ip te lire per klientin
+	for DOT_IP in {2..254}; do
+		DOT_EXISTS=$(grep -c "${SERVER_WG_IPV4::-1}${DOT_IP}" "/etc/wireguard/${SERVER_WG_NIC}.conf")
+		if [[ ${DOT_EXISTS} == '0' ]]; then
+			break
+		fi
+	done
+
+	# nese jan plot te gjitha ips atehere mbaruan
+	if [[ ${DOT_EXISTS} == '1' ]]; then
+		echo ""
+		echo "The subnet configured supports only 253 clients."
+		exit 1
+	fi
+
+	BASE_IP=$(echo "$SERVER_WG_IPV4" | awk -F '.' '{ print $1"."$2"."$3 }')
+	until [[ ${IPV4_EXISTS} == '0' ]]; do
+		read -rp "Client WireGuard IPv4: ${BASE_IP}." -e -i "${DOT_IP}" DOT_IP
+		CLIENT_WG_IPV4="${BASE_IP}.${DOT_IP}"
+		IPV4_EXISTS=$(grep -c "$CLIENT_WG_IPV4/32" "/etc/wireguard/${SERVER_WG_NIC}.conf")
+
+		if [[ ${IPV4_EXISTS} != 0 ]]; then
+			echo ""
+			echo -e "${ORANGE}A client with the specified IPv4 was already created, please choose another IPv4.${NC}"
+			echo ""
+		fi
+	done
+
+	BASE_IP=$(echo "$SERVER_WG_IPV6" | awk -F '::' '{ print $1 }')
+	until [[ ${IPV6_EXISTS} == '0' ]]; do
+		read -rp "Client WireGuard IPv6: ${BASE_IP}::" -e -i "${DOT_IP}" DOT_IP
+		CLIENT_WG_IPV6="${BASE_IP}::${DOT_IP}"
+		IPV6_EXISTS=$(grep -c "${CLIENT_WG_IPV6}/128" "/etc/wireguard/${SERVER_WG_NIC}.conf")
+
+		if [[ ${IPV6_EXISTS} != 0 ]]; then
+			echo ""
+			echo -e "${ORANGE}A client with the specified IPv6 was already created, please choose another IPv6.${NC}"
+			echo ""
+		fi
+	done
+
+	# gjenerojme celesa per klientin e ri
+	CLIENT_PRIV_KEY=$(wg genkey)
+	CLIENT_PUB_KEY=$(echo "${CLIENT_PRIV_KEY}" | wg pubkey)
+	CLIENT_PRE_SHARED_KEY=$(wg genpsk)
+
+	HOME_DIR=$(getHomeDirForClient "${CLIENT_NAME}")
+
+	# krijoni filen e konfigurimit per klientin
+	echo "[Interface]
+PrivateKey = ${CLIENT_PRIV_KEY}
+Address = ${CLIENT_WG_IPV4}/32,${CLIENT_WG_IPV6}/128
+DNS = ${CLIENT_DNS_1},${CLIENT_DNS_2}
+
+# Uncomment the next line to set a custom MTU
+# This might impact performance, so use it only if you know what you are doing
+# See https://github.com/nitred/nr-wg-mtu-finder to find your optimal MTU
+# MTU = 1420
+
+[Peer]
+PublicKey = ${SERVER_PUB_KEY}
+PresharedKey = ${CLIENT_PRE_SHARED_KEY}
+Endpoint = ${ENDPOINT}
+AllowedIPs = ${ALLOWED_IPS}" >"${HOME_DIR}/${SERVER_WG_NIC}-client-${CLIENT_NAME}.conf"
+
+	# shtojme klientin ne konfigurimin e serverit
+	echo -e "\n### Client ${CLIENT_NAME}
+[Peer]
+PublicKey = ${CLIENT_PUB_KEY}
+PresharedKey = ${CLIENT_PRE_SHARED_KEY}
+AllowedIPs = ${CLIENT_WG_IPV4}/32,${CLIENT_WG_IPV6}/128" >>"/etc/wireguard/${SERVER_WG_NIC}.conf"
+
+	# reload konfigurimin pa e restartuar wireguard
+	wg syncconf "${SERVER_WG_NIC}" <(wg-quick strip "${SERVER_WG_NIC}")
+
+	# nese kemi qrencode bejme qr code per te skanuar me telefon
+	if command -v qrencode &>/dev/null; then
+		echo -e "${GREEN}\nHere is your client config file as a QR Code:\n${NC}"
+		qrencode -t ansiutf8 -l L <"${HOME_DIR}/${SERVER_WG_NIC}-client-${CLIENT_NAME}.conf"
+		echo ""
+	fi
+
+	echo -e "${GREEN}Your client config file is in ${HOME_DIR}/${SERVER_WG_NIC}-client-${CLIENT_NAME}.conf${NC}"
+}
+
+# shfaqim listen e te gjitha klientave qe kemi
+function listClients() {
+	NUMBER_OF_CLIENTS=$(grep -c -E "^### Client" "/etc/wireguard/${SERVER_WG_NIC}.conf")
+	if [[ ${NUMBER_OF_CLIENTS} -eq 0 ]]; then
+		echo ""
+		echo "You have no existing clients!"
+		exit 1
+	fi
+
+	grep -E "^### Client" "/etc/wireguard/${SERVER_WG_NIC}.conf" | cut -d ' ' -f 3 | nl -s ') '
+}
+
+# hiqim nje klient nga serveri
+function revokeClient() {
+	NUMBER_OF_CLIENTS=$(grep -c -E "^### Client" "/etc/wireguard/${SERVER_WG_NIC}.conf")
+	if [[ ${NUMBER_OF_CLIENTS} == '0' ]]; then
+		echo ""
+		echo "You have no existing clients!"
+		exit 1
+	fi
+
+	echo ""
+	echo "Select the existing client you want to revoke"
+	grep -E "^### Client" "/etc/wireguard/${SERVER_WG_NIC}.conf" | cut -d ' ' -f 3 | nl -s ') '
+	until [[ ${CLIENT_NUMBER} -ge 1 && ${CLIENT_NUMBER} -le ${NUMBER_OF_CLIENTS} ]]; do
+		if [[ ${CLIENT_NUMBER} == '1' ]]; then
+			read -rp "Select one client [1]: " CLIENT_NUMBER
+		else
+			read -rp "Select one client [1-${NUMBER_OF_CLIENTS}]: " CLIENT_NUMBER
+		fi
+	done
+
+	# gjejme emrin e klientit nga numri qe zgjodhem
+	CLIENT_NAME=$(grep -E "^### Client" "/etc/wireguard/${SERVER_WG_NIC}.conf" | cut -d ' ' -f 3 | sed -n "${CLIENT_NUMBER}"p)
+
+	# fshijme klientin nga konfigurimi i serverit
+	sed -i "/^### Client ${CLIENT_NAME}\$/,/^$/d" "/etc/wireguard/${SERVER_WG_NIC}.conf"
+
+	# fshijme edhe filen e konfigurimit te klientit
+	HOME_DIR=$(getHomeDirForClient "${CLIENT_NAME}")
+	rm -f "${HOME_DIR}/${SERVER_WG_NIC}-client-${CLIENT_NAME}.conf"
+
+	# reload konfigurimin qe te hyjne ndryshimet ne fuqi
+	wg syncconf "${SERVER_WG_NIC}" <(wg-quick strip "${SERVER_WG_NIC}")
+}
+
+# funksioni per te fshire wireguard komplet nga serveri
+function uninstallWg() {
+	echo ""
+	echo -e "\n${RED}WARNING: This will uninstall WireGuard and remove all the configuration files!${NC}"
+	echo -e "${ORANGE}Please backup the /etc/wireguard directory if you want to keep your configuration files.\n${NC}"
+	read -rp "Do you really want to remove WireGuard? [y/n]: " -e REMOVE
+	REMOVE=${REMOVE:-n}
+	if [[ $REMOVE == 'y' ]]; then
+		checkOS
+
+		if [[ ${OS} == 'alpine' ]]; then
+			rc-service "wg-quick.${SERVER_WG_NIC}" stop
+			rc-update del "wg-quick.${SERVER_WG_NIC}"
+			unlink "/etc/init.d/wg-quick.${SERVER_WG_NIC}"
+			rc-update del sysctl
+		else
+			systemctl stop "wg-quick@${SERVER_WG_NIC}"
+			systemctl disable "wg-quick@${SERVER_WG_NIC}"
+		fi
+
+		if [[ ${OS} == 'ubuntu' ]] || [[ ${OS} == 'debian' ]]; then
+			apt-get remove -y wireguard wireguard-tools qrencode
+		elif [[ ${OS} == 'fedora' ]]; then
+			dnf remove -y --noautoremove wireguard-tools qrencode
+			if [[ ${VERSION_ID} -lt 32 ]]; then
+				dnf remove -y --noautoremove wireguard-dkms
+				dnf copr disable -y jdoss/wireguard
+			fi
+		elif [[ ${OS} == 'centos' ]] || [[ ${OS} == 'almalinux' ]] || [[ ${OS} == 'rocky' ]]; then
+			yum remove -y --noautoremove wireguard-tools
+			if [[ ${VERSION_ID} == 8* ]]; then
+				yum remove --noautoremove kmod-wireguard qrencode
+			fi
+		elif [[ ${OS} == 'oracle' ]]; then
+			yum remove --noautoremove wireguard-tools qrencode
+		elif [[ ${OS} == 'arch' ]]; then
+			pacman -Rs --noconfirm wireguard-tools qrencode
+		elif [[ ${OS} == 'alpine' ]]; then
+			(cd qrencode-4.1.1 || exit && make uninstall)
+			rm -rf qrencode-* || exit
+			apk del wireguard-tools libqrencode libqrencode-tools
+		fi
+
+		rm -rf /etc/wireguard
+		rm -f /etc/sysctl.d/wg.conf
+
+		if [[ ${OS} == 'alpine' ]]; then
+			rc-service --quiet "wg-quick.${SERVER_WG_NIC}" status &>/dev/null
+		else
+			# Reload sysctl
+			sysctl --system
+
+			# Check if WireGuard is running
+			systemctl is-active --quiet "wg-quick@${SERVER_WG_NIC}"
+		fi
+		WG_RUNNING=$?
+
+		if [[ ${WG_RUNNING} -eq 0 ]]; then
+			echo "WireGuard failed to uninstall properly."
+			exit 1
+		else
+			echo "WireGuard uninstalled successfully."
+			exit 0
+		fi
+	else
+		echo ""
+		echo "Removal aborted!"
+	fi
+}
+
+function manageMenu() {
+	echo "Welcome to WireGuard-install!"
+	echo "The git repository is available at: https://github.com/alban-hh/wireguard-install"
+	echo ""
+	echo "It looks like WireGuard is already installed."
+	echo ""
+	echo "What do you want to do?"
+	echo "   1) Add a new user"
+	echo "   2) List all users"
+	echo "   3) Revoke existing user"
+	echo "   4) Uninstall WireGuard"
+	echo "   5) Exit"
+	until [[ ${MENU_OPTION} =~ ^[1-5]$ ]]; do
+		read -rp "Select an option [1-5]: " MENU_OPTION
+	done
+	case "${MENU_OPTION}" in
+	1)
+		newClient
+		;;
+	2)
+		listClients
+		;;
+	3)
+		revokeClient
+		;;
+	4)
+		uninstallWg
+		;;
+	5)
+		exit 0
+		;;
+	esac
+}
+
+# Check for root, virt, OS...
+initialCheck
+
+# Check if WireGuard is already installed and load params
+if [[ -e /etc/wireguard/params ]]; then
+	source /etc/wireguard/params
+	manageMenu
 else
-    systemctl reload ssh
-    echo -e "${GREEN}✓ SSH hardened (keys only)${NC}"
+	installWireGuard
 fi
-
-# rifillo shërbimet
-echo -e "${GREEN}Restarting services...${NC}"
-systemctl restart wg-quick@wg0
-systemctl start cloudflared-dns.service
-
-# validim final
-echo -e "${GREEN}Running final validation...${NC}"
-sleep 3
-
-# kontrollo që wireguard funksionon
-if ! systemctl is-active --quiet wg-quick@wg0; then
-    echo -e "${RED}Error: WireGuard service is not running!${NC}"
-    exit 1
-fi
-
-# kontrollo që cloudflared funksionon
-if ! systemctl is-active --quiet cloudflared-dns.service; then
-    echo -e "${ORANGE}Warning: Cloudflared not running, attempting restart...${NC}"
-    systemctl restart cloudflared-dns.service
-    sleep 2
-fi
-
-# kontrollo që nat ekziston
-NAT_CHECK=$(iptables -t nat -L POSTROUTING -n | grep -c MASQUERADE)
-if [ "$NAT_CHECK" -eq 0 ]; then
-    echo -e "${RED}ERROR: NAT/MASQUERADE not configured!${NC}"
-    exit 1
-fi
-
-# shfaq rezultatet finale
-echo ""
-echo -e "${GREEN}════════════════════════════════${NC}"
-echo -e "${GREEN}  Installation Complete! 🎉${NC}"
-echo -e "${GREEN}════════════════════════════════${NC}"
-echo ""
-echo -e "${BLUE}System Information:${NC}"
-echo "  OS: Ubuntu $VERSION_ID 64-bit"
-echo "  Interface: $PUBLIC_NIC"
-echo ""
-echo -e "${BLUE}Service Status:${NC}"
-echo "  ✓ WireGuard: Running on port ${WG_PORT} (IPv4 ONLY)"
-echo "  ✓ Cloudflared: $(systemctl is-active cloudflared-dns.service)"
-echo "  ✓ NAT: MASQUERADE on ${PUBLIC_NIC}"
-echo "  ✓ Firewall: DROP policy active"
-echo "  ✓ IPv6: FULLY DISABLED"
-echo "  ✓ SSH: $(grep -q '^PasswordAuthentication no' /etc/ssh/sshd_config && echo 'Keys only' || echo 'Password enabled')"
-echo ""
-echo -e "${ORANGE}Client Configuration(s):${NC}"
-ls -1 /root/wg0-client-*.conf
-echo ""
-SERVER_IP=$(grep "Endpoint" /root/wg0-client-*.conf 2>/dev/null | head -1 | cut -d'=' -f2 | xargs | cut -d':' -f1)
-echo -e "${ORANGE}Connection Details:${NC}"
-echo "  Server: ${SERVER_IP}:${WG_PORT}"
-echo "  DNS: 10.66.66.1 (encrypted DoH)"
-echo "  IPv6: DISABLED (no leaks)"
-echo ""
-echo -e "${ORANGE}Firewall Rules:${NC}"
-echo "  INPUT: $(iptables -L INPUT --line-numbers | grep -c '^[0-9]') rules"
-echo "  FORWARD: $(iptables -L FORWARD --line-numbers | grep -c '^[0-9]') rules"
-echo "  NAT: $(iptables -t nat -L POSTROUTING --line-numbers | grep -c '^[0-9]') rules"
-echo ""
-echo -e "${ORANGE}Backups:${NC}"
-ls -1 /etc/wireguard/*.backup* 2>/dev/null | head -3
-echo ""
-echo -e "${GREEN}To add more clients:${NC} sudo bash /tmp/wg-install.sh"
-echo -e "${GREEN}Then update DNS:${NC} sed -i 's/DNS = .*/DNS = 10.66.66.1/' /root/wg0-client-*.conf"
-echo ""
