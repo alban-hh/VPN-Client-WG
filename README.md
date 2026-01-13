@@ -2,7 +2,7 @@
 
 ky projekt eshte nje bash script qe te ben setup te nje wireguard vpn server ne linux sa me kollaj qe te mundesht
 
-## qka eshte wireguard
+## cfar eshte wireguard
 
 wireguard eshte nje vpn moderne dhe shume i shpejt qe punon ne nivelin e kernelit
 
