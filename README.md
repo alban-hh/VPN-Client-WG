@@ -1,63 +1,43 @@
-# wireguard installer
+# WireGuard Installer
 
-ky projekt eshte nje bash script qe te ben setup te nje wireguard vpn server ne linux sa me kollaj qe te mundesht
+[![CI](https://github.com/alban-hh/VPN-Client-WG/actions/workflows/ci.yml/badge.svg)](https://github.com/alban-hh/VPN-Client-WG/actions/workflows/ci.yml)
+![Bash](https://img.shields.io/badge/Bash-4EAA25?logo=gnubash&logoColor=white)
+![WireGuard](https://img.shields.io/badge/WireGuard-88171A?logo=wireguard&logoColor=white)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-## cfar eshte wireguard
+An interactive Bash script that turns a fresh Linux server into a WireGuard VPN server and manages its clients.
 
-wireguard eshte nje vpn moderne dhe shume i shpejt qe punon ne nivelin e kernelit
+## What it does
 
-me kete script klienti do te dergoj te gjith trafikun e tij nepermjet nje tuneli te enkriptuar ne server dhe serveri do ta rout ate trafik me nat keshtu qe do te duket sikur klienti po ban browse me ip te serverit
+- Installs WireGuard and its tools with the package manager of your distribution
+- Generates server keys, picks a random port and writes the interface config
+- Sets up NAT and forwarding through iptables or firewalld, for IPv4 and IPv6
+- Creates client configs with preshared keys and prints them as QR codes
+- Adds, lists and revokes clients, or removes WireGuard entirely, on later runs
 
-skripti suporton edhe ipv4 edhe ipv6
+## Supported systems
 
-## kerkesa
+AlmaLinux 8+, Alpine Linux, Arch Linux, CentOS Stream 8+, Debian 10+, Fedora 32+, Oracle Linux, Rocky Linux 8+ and Ubuntu 18.04+. OpenVZ and LXC are not supported.
 
-sisteme operative te suportuara:
-
-- almalinux >= 8
-- alpine linux
-- arch linux
-- centos stream >= 8
-- debian >= 10
-- fedora >= 32
-- oracle linux
-- rocky linux >= 8
-- ubuntu >= 18.04
-
-## perdorimi
-
-shkarko dhe ekzekuto skriptin dhe pergjigju pyetjeve
+## Usage
 
 ```bash
-curl -O https://raw.githubusercontent.com/alban-hh/wireguard-install/master/wireguard-install.sh
+curl -O https://raw.githubusercontent.com/alban-hh/VPN-Client-WG/main/wireguard-install.sh
 chmod +x wireguard-install.sh
-./wireguard-install.sh
+sudo ./wireguard-install.sh
 ```
 
-do te instaloj wireguard ne server do ta konfiguron do te krijoj nje systemd service dhe nje file konfigurimi per klientin
+Answer the prompts and the script installs WireGuard, enables the service and creates the first client. Run it again to add, list or revoke clients. Client config files are written to the home directory of the invoking user.
 
-ekzekuto skriptin perseri per te shtuar ose larguar klienta
+## Development
 
-## provajdera te rekomanduar
+```bash
+shellcheck wireguard-install.sh
+shfmt -d wireguard-install.sh
+```
 
-disa provajdera te lire dhe te mire per vpn server:
+Both run in CI on every push.
 
-- vultr me lokacione neper bote ipv6 support nga $5 ne muaj
-- hetzner ne gjermani finlande dhe usa me ipv6 dhe 20 tb trafik nga 4.5 euro ne muaj
-- digital ocean me lokacione neper bote ipv6 support nga $4 ne muaj
+## License
 
-## kontribut
-
-kontributet jan te mirepritura
-
-### diskuto ndryshimet
-
-hap nje issue para se te besh pull request nese don me diskutu ndonje ndryshim te madh
-
-### formatimi i kodit
-
-perdorim shellcheck dhe shfmt per te garantuar qe kodi bash eshte i shkruar mire
-
-## licence
-
-ky projekt eshte nen licence mit
+MIT
